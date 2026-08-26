@@ -35,6 +35,10 @@ export function useCollectionSync<T extends { id: string }>(
     const seedMarkerRef = doc(db, "_seed_markers", collectionName);
     const unsub = onSnapshot(ref, async snapshot => {
       if (snapshot.empty && !seeding.current) {
+        // Флаг ставим синхронно, до await — иначе повторное срабатывание
+        // onSnapshot (обычный кэш → сервер дубль-триггер Firestore) успело
+        // бы тоже пройти проверку и запустить второй параллельный засев.
+        seeding.current = true;
         const marker = await getDoc(seedMarkerRef).catch(() => null);
         if (marker?.exists()) {
           // Коллекцию когда-то засеяли и потом сознательно опустошили.
@@ -42,7 +46,6 @@ export function useCollectionSync<T extends { id: string }>(
           setReady(true);
           return;
         }
-        seeding.current = true;
         const batch = writeBatch(db);
         seed.forEach(item => batch.set(doc(db, collectionName, item.id), item as DocumentData));
         batch.set(seedMarkerRef, { seededAt: Date.now() });
