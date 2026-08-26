@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   collection,
   doc,
+  getDoc,
   onSnapshot,
   writeBatch,
   setDoc,
@@ -22,20 +23,32 @@ export function useCollectionSync<T extends { id: string }>(
 ) {
   const [value, setValueState] = useState<T[]>(seed);
   const [ready, setReady] = useState(false);
-  const seeded = useRef(false);
+  const seeding = useRef(false);
 
   useEffect(() => {
+    seeding.current = false;
     const ref = collection(db, collectionName);
-    const unsub = onSnapshot(ref, snapshot => {
-      if (snapshot.empty && !seeded.current) {
-        // Коллекция пуста — первичное заполнение исходными данными.
-        seeded.current = true;
+    // Отдельный маркер "эта коллекция уже когда-либо засеивалась" — вместо
+    // snapshot.empty, который иначе принял бы намеренное удаление всех
+    // резидентов/событий администратором за "ещё не засеяно" и восстановил
+    // бы исходные демо-данные при следующей перезагрузке страницы.
+    const seedMarkerRef = doc(db, "_seed_markers", collectionName);
+    const unsub = onSnapshot(ref, async snapshot => {
+      if (snapshot.empty && !seeding.current) {
+        const marker = await getDoc(seedMarkerRef).catch(() => null);
+        if (marker?.exists()) {
+          // Коллекцию когда-то засеяли и потом сознательно опустошили.
+          setValueState([]);
+          setReady(true);
+          return;
+        }
+        seeding.current = true;
         const batch = writeBatch(db);
         seed.forEach(item => batch.set(doc(db, collectionName, item.id), item as DocumentData));
+        batch.set(seedMarkerRef, { seededAt: Date.now() });
         batch.commit().catch(() => {});
         return;
       }
-      seeded.current = true;
       const items = snapshot.docs.map(item => item.data() as T);
       setValueState(items);
       setReady(true);
