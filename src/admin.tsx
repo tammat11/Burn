@@ -32,6 +32,17 @@ const sections: Section[] = ["Обзор", "Резиденты", "Меропри
 const initialResidents: ManagedResident[] = seedResidents.map(item => ({ ...item, membershipEnd: "2027-08-15" }));
 const initialOperations: EventOperations = Object.fromEntries(seedEvents.map(item => [item.id, { payment: item.price ? "pending" : "free", visited: item.attendees.slice(0, 1) }]));
 
+function describeAuthError(err: unknown): string {
+  const code = err && typeof err === "object" && "code" in err ? String((err as { code: unknown }).code) : "";
+  if (code === "auth/network-request-failed") return "Нет соединения с интернетом";
+  if (code === "auth/too-many-requests") return "Слишком много попыток — попробуйте позже";
+  if (code === "auth/invalid-email" || code === "auth/missing-password") return "Проверьте email и пароль";
+  if (code === "auth/invalid-credential" || code === "auth/wrong-password" || code === "auth/user-not-found") {
+    return "Неверный email или пароль";
+  }
+  return "Ошибка входа, попробуйте ещё раз";
+}
+
 function LoginGate({ onSignedIn }: { onSignedIn: () => void }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -46,7 +57,7 @@ function LoginGate({ onSignedIn }: { onSignedIn: () => void }) {
       await signInWithEmailAndPassword(auth, email.trim(), password);
       onSignedIn();
     } catch (err) {
-      setError(err instanceof Error ? "Неверный email или пароль" : "Ошибка входа");
+      setError(describeAuthError(err));
     } finally {
       setBusy(false);
     }
