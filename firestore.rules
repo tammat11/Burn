@@ -1,0 +1,106 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function ownsUser(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function isChatMember(chatId) {
+      return signedIn()
+        && request.auth.uid in get(
+          /databases/$(database)/documents/chats/$(chatId)
+        ).data.members;
+    }
+
+    // Админка (src/admin.tsx) — вход по email/паролю, доступ разрешён
+    // только известным адресам администраторов.
+    function isAdmin() {
+      return signedIn()
+        && request.auth.token.email in ['office@ic-group.kz', 'laybleee1@gmail.com'];
+    }
+
+    // Справочные данные админки: резиденты/события/победы/привилегии/
+    // настройки. Читает кто угодно (общедоступные списки в приложении),
+    // пишет только администратор.
+    match /admin_residents/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /admin_events/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /admin_wins/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /admin_privileges/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /admin_config/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    // Служебный маркер "эта admin_* коллекция уже была засеяна хотя бы раз"
+    // (см. src/adminSync.ts useCollectionSync) — не даёт повторно
+    // восстановить demo-данные после того, как админ намеренно удалил все
+    // записи.
+    match /_seed_markers/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /users/{uid} {
+      allow create, read, update: if ownsUser(uid);
+      allow delete: if false;
+
+      match /devices/{deviceId} {
+        allow read, write: if ownsUser(uid);
+      }
+
+      match /notifications/{notificationId} {
+        allow read, update: if ownsUser(uid);
+        allow create, delete: if false;
+      }
+
+      // Записи на мероприятия. Документ = id мероприятия, поэтому
+      // повторная запись идемпотентна. Отменить регистрацию можно, поэтому
+      // delete разрешён — в отличие от профиля и уведомлений.
+      match /registrations/{eventId} {
+        allow read, write: if ownsUser(uid);
+      }
+    }
+
+    match /chats/{chatId} {
+      allow create: if signedIn()
+        && request.resource.data.members is list
+        && request.auth.uid in request.resource.data.members;
+      // Read directly off resource.data instead of isChatMember()'s get() —
+      // a rule that get()s the very document a list query is evaluating
+      // itself is unreliable for `list` requests and was rejecting every
+      // watchChats() query with permission-denied even for legitimate
+      // members. resource.data is already available for both get and list.
+      allow read: if signedIn() && request.auth.uid in resource.data.members;
+      allow update: if signedIn()
+        && request.auth.uid in resource.data.members
+        && request.resource.data.members == resource.data.members;
+      allow delete: if false;
+
+      match /messages/{messageId} {
+        allow read: if isChatMember(chatId);
+        allow create: if isChatMember(chatId)
+          && request.resource.data.senderId == request.auth.uid
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 4000;
+        allow update, delete: if false;
+      }
+    }
+  }
+}
